@@ -1,14 +1,12 @@
 {
     "name": "dvaoo",
     "author": "SReject",
-
     "homepage": "https://github.com/SReject/dvaoo",
-
     "license": "ISC",
-
     "dependencies": {
         "express": "^4.17.1",
         "express-ws": "^5.0.2",
+        "node-fetch": "^2.6.1",
         "ws": "^7.5.3"
     }
 }
