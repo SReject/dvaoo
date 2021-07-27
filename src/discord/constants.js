@@ -1,6 +1,6 @@
 'use strict';
 
-exports.IPC_OPCODE = {
+exports.RPC_OPCODE = {
     HANDSHAKE: 0,
     MESSAGE: 1,
     CLOSE: 2,
@@ -8,7 +8,7 @@ exports.IPC_OPCODE = {
     PONG: 4
 };
 
-exports.IPC_PATH = ((prefix) => {
+exports.RPC_PATH = ((prefix) => {
     if (process.platform !== 'win32') {
         const { XDG_RUNTIME_DIR, TMPDIR, TMP, TEMP } = process.env;
         prefix = (XDG_RUNTIME_DIR || TMPDIR || TMP || TEMP || '/tmp').replace(/\/$/, '') + '/';

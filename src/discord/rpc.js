@@ -1,183 +1,235 @@
 const net = require('net');
 const EventEmitter = require('events');
 const { uuid } = require('../utils.js');
-const { IPC_OPCODE, IPC_PATH } = require('./constants.js');
+const { RPC_OPCODE, RPC_PATH } = require('./constants.js');
 
-const getIpcSocket = (attempt = 0) => {
-    const path = IPC_PATH + attempt;
-    return new Promise((resolve, reject) => {
-        const onSockError = () => {
-            if (attempt >= 10) {
-                reject(new Error('IPC:FAILED_TO_CONNECT'));
-            } else {
-                resolve(getIpcSocket(attempt + 1));
-            }
-        };
+const getRpcSocket = async () => {
+    let attempt = 0;
+    while (attempt < 10) {
+        try {
+            let rpcSock = await new Promise((resolve, reject) => {
+                const path = RPC_PATH + attempt;
+                let sock = net.createConnection(path, () => {
+                    sock.removeListener('error', reject);
+                    sock.pause();
+                    resolve(sock);
+                });
+                sock.on('error', reject);
+            });
 
-        const sock = net.createConnection(path, () => {
-            sock.pause();
-            sock.removeListener('error', onSockError);
-            resolve(sock);
-        });
-        sock.once('error', onSockError);
-    });
+            return rpcSock;
+        } catch (err) {
+            attempt += 1;
+        }
+    }
+    throw new Error('RPC:FAILED_TO_CONNECT');
 };
 
-
-class IPCTransport extends EventEmitter {
+module.exports = class DiscordRPC extends EventEmitter {
     constructor() {
         super();
-        this._ipcSock = null;
-        this._ipcDataBuffer = null;
+
+        /**@type {?net.Socket} */
+        this._rpcSock = null;
+
+        /**@type {?Buffer} */
+        this._rpcDataBuffer = null;
+
+        /**@type {Map} */
+        this._rpcInvocations = new Map();
     }
 
     async connect() {
         if (this.appinfo.client_id == null) {
-            throw new Error('IPC:CLIENT_ID_MISSING');
+            throw new Error('RPC:CLIENT_ID_MISSING');
         }
-        if (this._ipcClosing) {
-            throw new Error('IPC:CONNECTION_CLOSING');
+        if (this._rpcClosing) {
+            throw new Error('RPC:CONNECTION_CLOSING');
         }
-        if (this._ipcSock) {
-            throw new Error('IPC:CONNECTION_IN_USE');
+        if (this._rpcSock) {
+            throw new Error('RPC:CONNECTION_IN_USE');
         }
 
-        this._ipcSock = await getIpcSocket();
-        console.log('[IPC] connected to discord');
+
+        this._rpcSock = await getRpcSocket();
+        console.log('[RPC] Connected to discord');
 
         // Socket closed handling
-        const ipcClosed = (...data) => {
-            const closing = this._ipcClosing;
+        const rpcClosed = (...data) => {
+            const closing = this._rpcClosing;
+            const invocations = this._rpcInvocations;
 
-            if (this._ipcTimeout) {
-                clearTimeout(this._ipcTimeout);
+            if (this._rpcTimeout) {
+                clearTimeout(this._rpcTimeout);
             }
 
-            this._ipcSock.off('close', ipcClosed);
-            this._ipcSock.off('error', ipcClosed);
-            this._ipcSock.unref();
-            this._ipcSock = null;
-            this._ipcDataBuffer = null;
-            this._ipcTimeout = null;
-            this._ipcClosing = null;
+            this._rpcSock.off('close', rpcClosed);
+            this._rpcSock.off('error', rpcClosed);
+            this._rpcSock.unref();
+            this._rpcSock = null;
+            this._rpcDataBuffer = null;
+            this._rpcTimeout = null;
+            this._rpcInvocations = null;
+            this._rpcClosing = null;
 
-            this.emit('IPC:CLOSED', data);
+
+            for (const invocation of invocations) {
+                invocation.reject('RPC:CLOSED');
+            }
+
+            this.emit('RPC:CLOSED', data);
             if (closing) {
                 closing.resolve();
             }
         };
 
-        // ipcsock closed
-        this._ipcSock.on('close', ipcClosed);
-        this._ipcSock.on('error', ipcClosed);
+        // rpcsock closed
+        this._rpcSock.on('close', rpcClosed);
+        this._rpcSock.on('error', rpcClosed);
 
         // read from socket
-        this._ipcSock.on('readable', () => {
+        this._rpcSock.on('readable', () => {
 
             // read data in the socket's read buffer
-            let data;
-            while (!!(data = this._ipcSock.read())) {
+            /** @type {Buffer} */
+            let sockdata;
+            while (!!(sockdata = this._rpcSock.read())) {
 
-                if (this._ipcDataBuffer == null) {
-                    this._ipcDataBuffer = data;
+                if (this._rpcDataBuffer == null) {
+                    this._rpcDataBuffer = sockdata;
                 } else {
-                    this._ipcDataBuffer = Buffer.concat([this._ipcDataBuffer, data]);
+                    this._rpcDataBuffer = Buffer.concat([this._rpcDataBuffer, sockdata]);
                 }
             }
 
             // process each frame
-            while (this._ipcDataBuffer) {
-                const buffLen = this._ipcDataBuffer.byteLength;
+            while (this._rpcDataBuffer) {
+                const buffLen = this._rpcDataBuffer.byteLength;
 
                 // haven't received the frame's full header
                 if (buffLen < 8) {
                     return;
                 }
 
-                const opcode = this._ipcDataBuffer.readInt32LE(0);
-                const frameLen = this._ipcDataBuffer.readInt32LE(4);
+                const opcode = this._rpcDataBuffer.readInt32LE(0);
+                const frameLen = this._rpcDataBuffer.readInt32LE(4);
 
                 // haven't received the entirety of the frame
                 if ((frameLen + 8) > buffLen) {
                     return;
                 }
 
+                /** Represents a received frame
+                 * @typedef {Object} FrameData
+                 * @property {String} cmd
+                 * @property {String} nonce
+                 * @property {String} evt
+                 * @property {any} data
+                */
+
                 // convert frame's data to js object
+                /** @type {(FrameData|undefined)} */
                 let msg;
                 if (frameLen > 0) {
-                    msg = JSON.parse(this._ipcDataBuffer.toString('utf8', 8, frameLen + 8));
+                    msg = JSON.parse(this._rpcDataBuffer.toString('utf8', 8, frameLen + 8));
                 }
 
                 // remove frame from data buffer
                 if ((frameLen + 8) < buffLen) {
-                    this._ipcDataBuffer = this._ipcDataBuffer.slice(frameLen + 9);
+                    this._rpcDataBuffer = this._rpcDataBuffer.slice(frameLen + 9);
                 } else {
-                    this._ipcDataBuffer = null;
+                    this._rpcDataBuffer = null;
                 }
 
                 // emit generic event
-                this.emit('IPC:RECEIVED_FRAME', { opcode, msg });
+                this.emit('RPC:RECEIVED_FRAME:*', { opcode, msg });
 
                 // emit frame-specific event
                 switch (opcode) {
-                    case IPC_OPCODE.MESSAGE:
-                        if (msg.cmd === 'DISPATCH' && msg.evt === 'READY' && this._ipcReady) {
-                            const resolve = this._ipcReady.resolve;
-                            this._ipcReady = null;
-                            resolve(msg.data);
-                        }
-                        this.emit('IPC:RECEIVED_MESSAGE', msg);
+                    case RPC_OPCODE.HANDSHAKE:
+                        this.emit('RPC:RECEIVED_FRAME:HANDSHAKE', msg);
                         break;
 
-                    case IPC_OPCODE.CLOSE:
-                        if (this._ipcReady) {
-                            const reject = this._ipcReady.reject;
-                            this._ipcReady = null;
+                    case RPC_OPCODE.MESSAGE:
+                        this.emit('RPC:RECEIVED_FRAME:MESSAGE', msg);
+
+                        const {cmd, nonce, evt, data} = msg;
+
+                        if (cmd === 'DISPATCH') {
+                            this.emit('DISCORD:*', msg);
+                            this.emit(`DISCORD:${evt}`, data);
+
+                            if (evt === 'READY' && this._rpcReady) {
+                                const resolve = this._rpcReady.resolve;
+                                this._rpcReady = null;
+                                resolve(data);
+                            }
+                        }
+
+                        if (nonce && this._rpcInvocations.has(nonce)) {
+                            const {resolve, reject} = this._rpcInvocations.get(nonce);
+                            this._rpcInvocations.delete(nonce);
+                            if (evt === 'ERROR') {
+                                const error = new Error(data.message);
+                                error.code = data.code;
+                                error.data = data;
+                                reject(error);
+                            } else {
+                                resolve(data);
+                            }
+                        }
+
+                        break;
+
+                    case RPC_OPCODE.CLOSE:
+                        if (this._rpcReady) {
+                            const reject = this._rpcReady.reject;
+                            this._rpcReady = null;
                             reject(msg);
                         }
-                        this.emit('IPC:RECEIVED_CLOSE', msg);
+                        this.emit('RPC:RECEIVED_FRAME:CLOSE', msg);
                         break;
 
-                    case IPC_OPCODE.PING:
-                        this.send(msg, IPC_OPCODE.PONG);
-                        this.emit('IPC:RECEIVED_PING', msg);
+                    case RPC_OPCODE.PING:
+                        this.send(msg, RPC_OPCODE.PONG);
+                        this.emit('RPC:RECEIVED_FRAME:PING', msg);
                         break;
 
-                    case IPC_OPCODE.PONG:
-                        this.emit('IPC:RECEIVED_PONG', msg);
+                    case RPC_OPCODE.PONG:
+                        this.emit('RPC:RECEIVED_FRAME:PONG', msg);
                         break;
                 }
             }
 
             // Reset ping timeout
-            if (this._ipcTimeout) {
-                clearTimeout(this._ipcTimeout);
-                this._ipcTimeout = setTimeout(() => {
-                    this.send(null, IPC_OPCODE.PING);
-                    this._ipcTimeout = setTimeout(() => {
+            if (this._rpcTimeout) {
+                clearTimeout(this._rpcTimeout);
+                this._rpcTimeout = setTimeout(() => {
+                    this.send(null, RPC_OPCODE.PING);
+                    this._rpcTimeout = setTimeout(() => {
                         this.terminate();
                     })
                 }, 60000);
             }
         });
 
-        this.send({v: 1, client_id: this.appinfo.client_id}, IPC_OPCODE.HANDSHAKE);
-        this._ipcReady = {};
+        this.send({v: 1, client_id: this.appinfo.client_id}, RPC_OPCODE.HANDSHAKE);
+        this._rpcReady = {};
 
-        this._ipcReady.promise = new Promise((resolve, reject) => {
-            this._ipcReady.resolve = resolve;
-            this._ipcReady.reject = reject;
+        this._rpcReady.promise = new Promise((resolve, reject) => {
+            this._rpcReady.resolve = resolve;
+            this._rpcReady.reject = reject;
         });
 
-        return await this._ipcReady.promise;
+        return await this._rpcReady.promise;
     }
 
-    send(data, opcode = IPC_OPCODE.MESSAGE) {
-        if (this._ipcClosing) {
-            throw new Error('IPC:CONNECTION_CLOSING');
+    send(data, opcode = RPC_OPCODE.MESSAGE) {
+        if (this._rpcClosing) {
+            throw new Error('RPC:CONNECTION_CLOSING');
         }
-        if (this._ipcSock == null || this._ipcSock.readyState !== 'open') {
-            throw new Error('IPC:NOT_CONNECTED');
+        if (this._rpcSock == null || this._rpcSock.readyState !== 'open') {
+            throw new Error('RPC:NOT_CONNECTED');
         }
 
         if (data == null) {
@@ -192,85 +244,46 @@ class IPCTransport extends EventEmitter {
         buff.writeInt32LE(len, 4);
         buff.write(data, 8, len);
 
-        this._ipcSock.write(buff);
-    }
-
-    close() {
-        if (this._ipcClosing) {
-            return this._ipcClosing.promise;
-        }
-        if (_ipcSock == null) {
-            return;
-        }
-        this._ipcClosing = {};
-        return this._ipcClosing.promise = new Promise((resolve, reject) => {
-            this._ipcClosing.resolve = resolve;
-            this._ipcSock.end();
-        });
-    }
-
-    terminate() {
-        const { _ipcSock, _ipcClosing, _ipcTimeout } = this;
-        this._ipcSock = null;
-        this._ipcDataBuffer = null;
-        this._ipcTimeout = null;
-        this._ipcClosing = null;
-        if (_ipcSock != null) {
-            _ipcSock.destroy();
-            _ipcSock.unref();
-        }
-        if (_ipcTimeout) {
-            clearTimeout(_ipcTimeout);
-        }
-        if (_ipcClosing) {
-            _ipcClosing.resolve();
-        }
-    }
-}
-
-
-
-
-
-
-
-
-function processRPCMessage({cmd, nonce, evt, data}) {
-    if (cmd === 'DISPATCH') {
-        this.emit(`DISCORD:${evt}`, data);
-    } else if (this._pendingInvocations.has(nonce)) {
-        const {resolve, reject} = this._pendingInvocations.get(nonce);
-        this._pendingInvocations.delete(nonce);
-        if (evt === 'ERROR') {
-            const error = new Error(data.message);
-            error.code = data.code;
-            error.data = data;
-            reject(error);
-        } else {
-            resolve(data);
-        }
-    }
-};
-
-module.exports = class DiscordRPC extends IPCTransport {
-    constructor(options) {
-        super(options);
-        this._pendingInvocations = new Map();
-        this.on('IPC:CLOSED', () => {
-            let pending = this._pendingInvocations;
-            this._pendingInvocations = new Map();
-            pending.forEach(invocation => {
-                invocation.reject(new Error('IPC:CONNECTION_CLOSED'));
-            });
-        });
-        this.on('IPC:RECEIVED_MESSAGE', processRPCMessage.bind(this));
+        this._rpcSock.write(buff);
     }
 
     invoke(cmd, args = {}, evt) {
         const nonce = uuid();
         return new Promise((resolve, reject) => {
-            this._pendingInvocations.set(nonce, { resolve, reject});
+            this._rpcInvocations.set(nonce, { resolve, reject });
             this.send({ cmd, args, evt, nonce});
         });
+    }
+
+    close() {
+        if (this._rpcClosing) {
+            return this._rpcClosing.promise;
+        }
+        if (_rpcSock == null) {
+            return;
+        }
+        this._rpcClosing = {};
+        return this._rpcClosing.promise = new Promise((resolve, reject) => {
+            this._rpcClosing.resolve = resolve;
+            this._rpcSock.end();
+        });
+    }
+
+    terminate() {
+        const { _rpcSock, _rpcClosing, _rpcTimeout } = this;
+        this._rpcSock = null;
+        this._rpcDataBuffer = null;
+        this._rpcTimeout = null;
+        this._rpcClosing = null;
+        if (_rpcSock != null) {
+            _rpcSock.destroy();
+            _rpcSock.unref();
+        }
+        if (_rpcTimeout) {
+            clearTimeout(_rpcTimeout);
+        }
+        if (_rpcClosing) {
+            _rpcClosing.resolve();
+        }
     }
 }
