@@ -4,6 +4,7 @@ exports.RPC_OPCODE = {
     HANDSHAKE: 0,
     MESSAGE: 1,
     CLOSE: 2,
+    CLOSING: 2,
     PING: 3,
     PONG: 4
 };
