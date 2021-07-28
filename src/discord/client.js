@@ -524,4 +524,68 @@ module.exports = class DiscordClient extends EventEmitter {
             }
         });
     }
+
+    subscribe(event, args) {
+        return this.invoke('SUBSCRIBE', args, event);
+    }
+
+    unsubscribe(event, args) {
+        return this.invoke('UNSUBSCRIBE', args, event);
+    }
+
+    getGuilds() {
+        return this.invoke('GET_GUILDS');
+    }
+
+    getGuild(guildId, timeout) {
+        return this.invoke('GET_GUILD', { guild_id: guildId, timeout});
+    }
+
+    getChannels(guildId) {
+        return this.invoke('GET_CHANNELS', { guild_id: guildId });
+    }
+
+    getChannel(channelId) {
+        return this.invoke('GET_CHANNEL', { channel_id: channelId });
+    }
+
+    setUserVoiceSettings(userId, settings) {
+        return this.invoke('SET_USER_VOICE_SETTINGS', settings);
+    }
+
+    selectVoiceChannel(channelId, timeout, force) {
+        return this.invoke('SELECT_VOICE_CHANNEL', { channel_id: channelId, timeout, force});
+    }
+
+    getSelectedVoiceChannel() {
+        return this.invoke('GET_SELECTED_VOICE_CHANNEL');
+    }
+
+    selectTextChannel(channelId, timeout) {
+        return this.invoke('SELECT_TEXT_CHANNEL', { channel_id: channelId, timeout });
+    }
+
+    getVoiceSettings() {
+        return this.invoke('GET_VOICE_SETTINGS');
+    }
+
+    setVoiceSettings(settings) {
+        return this.invoke('SET_VOICE_SETTINGS', settings);
+    }
+
+    setCertifiedDevices(devices) {
+        return this.invokde('SET_CERTIFIED_DEVICES', devices);
+    }
+
+    setActivity(pid, activity) {
+        return this.invoke('SET_ACTIVITY', { pid, activity });
+    }
+
+    sendActivityJoinInvite(userId) {
+        return this.invoke('SEND_ACTIVITY_JOIN_INVITE', { user_id: userId });
+    }
+
+    closeActivityRequest(userId) {
+        return this.invoke('CLOSE_ACTIVITY_REQUEST', {user_id: userId});
+    }
 };
