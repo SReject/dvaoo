@@ -1,9 +1,20 @@
 const net = require('net');
 const EventEmitter = require('events');
 const fetch = require('node-fetch');
-const { uuid } = require('../utils.js');
 const { RPC_OPCODE, RPC_PATH } = require('./constants.js');
 
+const uuid = () => {
+    let uid = 'rrrrrrrr-rrrr-4rrr-Mrrr-rrrrrrrrrrrr'.split('');
+    for (let i = 0; i < 36; i += 1) {
+        const rand = Math.floor(Math.random() * 16);
+        if (uid[i] === 'r') {
+            uid[i] = rand.toString(16);
+        } else if (uid[i] === 'M') {
+            uid[i] = (rand & 3).toString(16);
+        }
+    }
+    return uid.join('');
+};
 
 /** Attempts to connect to the discord app's IPC pipe
  * @returns {net.Socket}
@@ -431,23 +442,6 @@ module.exports = class DiscordClient extends EventEmitter {
                 this._rpcSock.on('close', closeHandler);
                 this._rpcSock.on('error', closeHandler);
                 this.readyState = 2;
-
-                // subscribe to events that are not guild or channel specific
-                [
-                    'GUILD_CREATE',
-                    'CHANNEL_CREATE',
-                    'VOICE_CHANNEL_SELECT',
-                    'VOICE_SETTINGS_UPDATE',
-                    'VOICE_CONNECTION_STATUS',
-                    'ACTIVITY_SPECTATE'
-                ].map(evt => {
-                    return new Promise(resolve => {
-                        let nonce = uuid();
-                        this._rpcInvocations.set(nonce, { resolve, reject: resolve });
-                        this._rpcSock.write(createFrame(RPC_OPCODE.MESSAGE, {cmd: 'SUBSCRIBE', evt, nonce}));
-                    });
-                });
-
                 resolve();
 
             } catch (err) {
