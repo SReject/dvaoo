@@ -373,7 +373,7 @@ module.exports = class DiscordClient extends EventEmitter {
                             dataBuffer = dataBuffer.slice(length + 8);
                         }
 
-                        this.emit('RPC:FRAME:*', frame);
+                        this.emit('RPC:FRAME:*', { opcode, frame });
 
                         switch (opcode) {
                             // shouldn't receive this as handshaking is handled above, but just incase
@@ -430,8 +430,24 @@ module.exports = class DiscordClient extends EventEmitter {
                 this._rpcSock.on('readable', readHandler);
                 this._rpcSock.on('close', closeHandler);
                 this._rpcSock.on('error', closeHandler);
-
                 this.readyState = 2;
+
+                // subscribe to events that are not guild or channel specific
+                [
+                    'GUILD_CREATE',
+                    'CHANNEL_CREATE',
+                    'VOICE_CHANNEL_SELECT',
+                    'VOICE_SETTINGS_UPDATE',
+                    'VOICE_CONNECTION_STATUS',
+                    'ACTIVITY_SPECTATE'
+                ].map(evt => {
+                    return new Promise(resolve => {
+                        let nonce = uuid();
+                        this._rpcInvocations.set(nonce, { resolve, reject: resolve });
+                        this._rpcSock.write(createFrame(RPC_OPCODE.MESSAGE, {cmd: 'SUBSCRIBE', evt, nonce}));
+                    });
+                });
+
                 resolve();
 
             } catch (err) {
