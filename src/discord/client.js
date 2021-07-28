@@ -398,7 +398,7 @@ module.exports = class DiscordClient extends EventEmitter {
                                         resolve(data);
                                     }
                                 } else if (cmd === 'DISPATCH') {
-                                    this.emit('DISCORD:*', msg);
+                                    this.emit('DISCORD:*', {cmd, evt, data});
                                     this.emit(`DISCORD:${evt}`, data);
                                 }
                                 break;
